@@ -38,9 +38,10 @@ int main(int argc, char **argv)
 	{
 		syslog(LOG_ERR, "Failed to write to %s\n", writefile);
 		ret = 1;
-		goto EXIT_CODE;
 	}
-		
+	
+	close(fd);	
+	
 EXIT_CODE:
 	closelog();
 	return ret;
