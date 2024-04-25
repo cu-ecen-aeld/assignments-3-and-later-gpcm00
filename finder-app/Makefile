@@ -7,4 +7,4 @@ writer.o: writer.c
 
 
 clean:
-	rm writer writer.o
+	rm -f writer writer.o
