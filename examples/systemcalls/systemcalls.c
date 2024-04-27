@@ -1,4 +1,13 @@
 #include "systemcalls.h"
+#include <errno.h>
+#include <string.h>
+#include <sys/wait.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <syslog.h>
+#include <unistd.h>
+#include <fcntl.h>
+
 
 /**
  * @param cmd the command to execute with system()
@@ -11,12 +20,15 @@ bool do_system(const char *cmd)
 {
 
 /*
- * TODO  add your code here
  *  Call the system() function with the command set in the cmd
  *   and return a boolean true if the system() call completed with success
  *   or false() if it returned a failure
 */
-
+    if(system(cmd) == -1)
+    {
+        fprintf(stderr, "Failed to call System call %s: %s\n", cmd, strerror(errno));
+        return false;
+    }
     return true;
 }
 
@@ -47,7 +59,7 @@ bool do_exec(int count, ...)
     command[count] = NULL;
     // this line is to avoid a compile warning before your implementation is complete
     // and may be removed
-    command[count] = command[count];
+    //command[count] = command[count];
 
 /*
  * TODO:
@@ -58,6 +70,34 @@ bool do_exec(int count, ...)
  *   as second argument to the execv() command.
  *
 */
+
+    pid_t pid = fork();
+    
+    if(pid == -1)
+        return false;
+    else if (pid == 0)
+    {
+        execv(command[0], command);
+        fprintf(stderr, "Failed to call System call %s: %s\n", command[0], strerror(errno));
+        exit(1);
+    }
+    
+    int status;
+    if(wait(&status) == -1)
+    {
+        perror("Child didn't terminate correctly");
+        return false;
+    }
+    
+    if(WIFEXITED(status))
+    {
+        if(WEXITSTATUS(status) == 1)
+        {
+            return false;
+        }
+    }
+    else 
+        return false;
 
     va_end(args);
 
@@ -90,9 +130,52 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
  *   Call execv, but first using https://stackoverflow.com/a/13784315/1446624 as a refernce,
  *   redirect standard out to a file specified by outputfile.
  *   The rest of the behaviour is same as do_exec()
- *
-*/
+ */
+    int fd = open(outputfile, O_WRONLY|O_TRUNC|O_CREAT, S_IRWXO);
+    if(fd < 0)
+    {
+        fprintf(stderr, "Failed to open file %s: %s\n", outputfile, strerror(errno));
+        return false;
+    }
+    
+    pid_t child = fork();
+    if (child == -1)
+    {
+        perror("Failed to fork");
+        return false;
+    }
+    else if (child == 0)
+    {
+        if(dup2(fd, 1) < 0)
+        {
+            perror("Failed to duplicate file system");
+            return false;
+        }
+        execv(command[0], command);
+        fprintf(stderr, "Failed to call System call %s: %s\n", command[0], strerror(errno));
+        exit(1);
+    }
+    
+    int status;
+    if(wait(&status) == -1)
+    {
+        perror("Child didn't terminate correctly");
+        return false;
+    }
+    
+    if(WIFEXITED(status))
+    {
+        if(WEXITSTATUS(status) == 1)
+        {
+            return false;
+        }
+    }
+    else 
+        return false;
 
+    va_end(args);
+
+    return true;
     va_end(args);
 
     return true;
