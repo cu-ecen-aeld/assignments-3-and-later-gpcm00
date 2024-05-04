@@ -86,11 +86,11 @@ ${CROSS_COMPILE}readelf -a ${OUTDIR}/rootfs/bin/busybox | grep "Shared library"
 
 # TODO: Add library dependencies to rootfs
 
-ARM_LIB_PATH=$(find ~ -name gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu)
-cp $(find ${ARM_LIB_PATH} -name ld-linux-aarch64.so.1) ${OUTDIR}/rootfs/lib/ld-linux-aarch64.so.1
-cp $(find ${ARM_LIB_PATH} -name libm.so.6) ${OUTDIR}/rootfs/lib64/libm.so.6
-cp $(find ${ARM_LIB_PATH} -name libresolv.so.2) ${OUTDIR}/rootfs/lib64/libresolv.so.2
-cp $(find ${ARM_LIB_PATH} -name libc.so.6) ${OUTDIR}/rootfs/lib64/libc.so.6
+ARM_LIB_PATH=$(${CROSS_COMPILE}gcc -print-sysroot)
+cp ${ARM_LIB_PATH}/lib/ld-linux-aarch64.so.1 ${OUTDIR}/rootfs/lib/ld-linux-aarch64.so.1
+cp ${ARM_LIB_PATH}/lib64/libm.so.6 ${OUTDIR}/rootfs/lib64/libm.so.6
+cp ${ARM_LIB_PATH}/lib64/libresolv.so.2 ${OUTDIR}/rootfs/lib64/libresolv.so.2
+cp ${ARM_LIB_PATH}/lib64/libc.so.6 ${OUTDIR}/rootfs/lib64/libc.so.6
 
 # TODO: Make device nodes
 sudo mknod -m 666 ${OUTDIR}/rootfs/dev/null c 1 3
