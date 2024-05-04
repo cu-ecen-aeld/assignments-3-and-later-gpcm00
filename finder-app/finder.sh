@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 
 # Accepts the following runtime arguments: the first argument is a path to 
 # a directory on the filesystem, referred to below as filesdir; the second
