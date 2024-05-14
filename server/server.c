@@ -19,7 +19,7 @@
 
 #define FD_STACK_SZ 13
 
-#define BUFFER_SZ   (512*1024)
+#define BUFFER_SZ   (1024)
 
 #define RECV_FILE   "/var/tmp/aesdsocketdata"
 
@@ -65,16 +65,16 @@ void termination_handler(int signum)
         if(access(RECV_FILE, F_OK) == 0)
         {
             check(unlink(RECV_FILE) == -1, "unlink");
-        }     
+        } 
+        exit(0);
     }
-    exit(0);
 }
 
 void terminate_parent(pid_t pid)
 {
     if(pid != 0)
     {
-        __clean_list(fd_list);  
+        __clean_list(fd_list);
         exit(0);
     }
 }
@@ -94,41 +94,48 @@ void* recv_thread(void* args)
     char* peer_addr = targ->peer_addr;
     struct plist* lst = targ->lst;
     
-    char buffer[BUFFER_SZ];
+    char* buffer = (char*)malloc(BUFFER_SZ * sizeof(char));
+    check(buffer == NULL, "malloc");
     memset((void*)buffer, 0, BUFFER_SZ);
     ssize_t nread;
-    
-    while(nread = recv(sockfd, buffer, BUFFER_SZ, 0))
+
+    check(file->fd < 0, "file not open in the thread");
+
+    off_t buffer_offset = 0;
+    ssize_t buffer_sz = BUFFER_SZ;
+    while((nread = recv(sockfd, (void*)(buffer + buffer_offset), BUFFER_SZ, 0)) == BUFFER_SZ)
     {
-        check(nread == -1, "recv");
+        buffer_offset += BUFFER_SZ;
+        buffer_sz += BUFFER_SZ;
+        buffer = (char*)realloc(buffer, buffer_sz * sizeof(char));
+        check(buffer == NULL, "realloc");
+        memset((void*)(buffer + buffer_offset), 0, BUFFER_SZ);
+    }
+    check(nread == -1, "recv");
 
-        __log_msg("Received %ldB\n", nread);
-        
-        check(file->fd < 0, "file not open in the thread");
-        
-        pthread_mutex_lock(&file->lock);
-        nread = write(file->fd, buffer, strlen(buffer));
-        
-        check(nread == -1, "write");
-        
-        off_t offset = lseek(file->fd, 0, SEEK_END);
-        check(lseek(file->fd, 0, SEEK_SET) < 0 || offset < 0, "lseek");
+    pthread_mutex_lock(&file->lock);
 
-        nread = read(file->fd, (void*)buffer, offset);
-        pthread_mutex_unlock(&file->lock);
-        check(nread == -1, "read");
-        
-        nread = send(sockfd, buffer, nread, 0);
-        check(nread == -1, "send");
+    check(write(file->fd, buffer, nread + buffer_offset) == -1, "write");
 
-        memset((void*)buffer, 0, nread);
+    check(lseek(file->fd, 0, SEEK_SET) < 0, "lseek");
 
-        __log_msg("Transmitted %ldB\n", nread);
+    while((nread = read(file->fd, (void*)buffer, buffer_sz)) == buffer_sz)
+    {
+        check(send(sockfd, buffer, nread, 0) == -1, "send");
     }
 
+    check(nread == -1, "read");
+
+    pthread_mutex_unlock(&file->lock);
+
+    check(send(sockfd, buffer, nread, 0) == -1, "send");
+    
     shutdown(sockfd, SHUT_RDWR);
+
     p_remove_list(lst, sockfd);
+
     free(targ);
+    free(buffer);
 
     __log_msg("Closed connection from %s\n", peer_addr);
 
@@ -257,6 +264,7 @@ int main(int argc, char** argv)
         
         check(!p_append_list(&p_fd_list, sockfd), "append(sockfd)");
         
+        // create receiver thread
         struct thread_args* targ = (struct thread_args*)malloc(sizeof(struct thread_args));
         targ->sockfd = sockfd;
         targ->filefd = &file;

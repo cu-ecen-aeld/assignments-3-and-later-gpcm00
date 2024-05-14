@@ -3,7 +3,7 @@ CC=$(CROSS_COMPILE)gcc
 all: server.o
 	$(CC) server.o -o aesdsocket -pthread
 writer.o: server.c
-	$(CC) -c server.c -o server.o -Wall
+	$(CC) -c server.c -o server.o -Wall -Werror
 
 clean:
 	rm -f aesdsocket server.o
