@@ -17,8 +17,6 @@
 #define BACKLOG  10
 #define IPLEN    10
 
-#define FD_STACK_SZ 13
-
 #define BUFFER_SZ   (1024)
 
 #define RECV_FILE   "/var/tmp/aesdsocketdata"
@@ -51,7 +49,7 @@ static struct list* fd_list = NULL;
 static struct open_threads{
     pthread_t threads[BACKLOG];
     size_t count;
-} open_threads;
+} open_threads = {{0}, 0};
 void termination_handler(int signum)
 {
     if (signum == SIGINT || signum == SIGTERM)
@@ -101,6 +99,7 @@ void* recv_thread(void* args)
 
     check(file->fd < 0, "file not open in the thread");
 
+    // receive data and keep it in the heap for writing
     off_t buffer_offset = 0;
     ssize_t buffer_sz = BUFFER_SZ;
     while((nread = recv(sockfd, (void*)(buffer + buffer_offset), BUFFER_SZ, 0)) == BUFFER_SZ)
@@ -113,25 +112,24 @@ void* recv_thread(void* args)
     }
     check(nread == -1, "recv");
 
+    // file operation start here, so ensure that no one else is messing up with the file
     pthread_mutex_lock(&file->lock);
 
     check(write(file->fd, buffer, nread + buffer_offset) == -1, "write");
 
-    check(lseek(file->fd, 0, SEEK_SET) < 0, "lseek");
+    check(lseek(file->fd, 0, SEEK_SET) < 0, "lseek");   // read from the beginning of the file
 
-    while((nread = read(file->fd, (void*)buffer, buffer_sz)) == buffer_sz)
+    // read in chunks of "buffer_sz" and send immediately
+    while((nread = read(file->fd, (void*)buffer, buffer_sz)) > 0)
     {
         check(send(sockfd, buffer, nread, 0) == -1, "send");
     }
-
     check(nread == -1, "read");
 
     pthread_mutex_unlock(&file->lock);
-
-    check(send(sockfd, buffer, nread, 0) == -1, "send");
     
+    // turn off the socket and remove it from the file descr table
     shutdown(sockfd, SHUT_RDWR);
-
     p_remove_list(lst, sockfd);
 
     free(targ);
@@ -146,6 +144,7 @@ void* recv_thread(void* args)
 int main(int argc, char** argv)
 {
     openlog("aesdsocket", 0, LOG_USER);
+    open_threads.count = 0;
 
     if(argc > 2)
     {
@@ -155,7 +154,7 @@ int main(int argc, char** argv)
 
     char* mode = argv[argc-1];
 
-    bool is_deamon = strcmp(mode, "-d") == 0;
+    bool is_deamon = (strcmp(mode, "-d") == 0);
 
     // initialize graceful termination
     struct sigaction term;
