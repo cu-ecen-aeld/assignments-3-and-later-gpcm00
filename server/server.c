@@ -34,6 +34,7 @@
 #define __clean_list(l)         \
     while(l != NULL) { close(l->fd); remove_list(&l, l->fd); }
 
+
 bool set_sigaction(int signum, struct sigaction* new_action)
 {
     int res = 0;
@@ -54,12 +55,12 @@ void termination_handler(int signum)
 {
     if (signum == SIGINT || signum == SIGTERM)
     {
+        // clean up the heap and finish all pending connections
         __log_msg("Caught signal, exiting\n");
-
         __wait_all_threads(open_threads);
-
         __clean_list(fd_list);  
 
+        // delete file if it's open
         if(access(RECV_FILE, F_OK) == 0)
         {
             check(unlink(RECV_FILE) == -1, "unlink");
@@ -117,7 +118,7 @@ void* recv_thread(void* args)
 
     check(write(file->fd, buffer, nread + buffer_offset) == -1, "write");
 
-    check(lseek(file->fd, 0, SEEK_SET) < 0, "lseek");   // read from the beginning of the file
+    check(lseek(file->fd, 0, SEEK_SET) == -1, "lseek");   // read from the beginning of the file
 
     // read in chunks of "buffer_sz" and send immediately
     while((nread = read(file->fd, (void*)buffer, buffer_sz)) > 0)
@@ -289,6 +290,7 @@ int main(int argc, char** argv)
     return 0;
 }
 
+// thread safe append file descriptor to the list
 bool p_append_list(struct plist* lst, int fd)
 {
     pthread_mutex_lock(&lst->lock);
@@ -297,6 +299,7 @@ bool p_append_list(struct plist* lst, int fd)
     return ret;
 }
 
+// thread safe remove file descriptor from the list
 bool p_remove_list(struct plist* lst, int fd)
 {
     pthread_mutex_lock(&lst->lock);
@@ -305,6 +308,7 @@ bool p_remove_list(struct plist* lst, int fd)
     return ret;
 }
 
+// append file descriptor to the list
 bool append_list(struct list** tail, int fd)
 {
     struct list* new_item = (struct list*)malloc(sizeof(struct list));
@@ -320,6 +324,7 @@ bool append_list(struct list** tail, int fd)
     return true;
 }
 
+// remove file descriptor from the list
 bool remove_list(struct list** tail, int fd)
 {
     if(*tail == NULL)
@@ -352,6 +357,7 @@ bool remove_list(struct list** tail, int fd)
     return false;
 }
 
+// check for errors and immediately terminate
 void check(bool cond, char* msg)
 { 
     if(cond) 
