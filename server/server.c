@@ -13,6 +13,7 @@
 #include <string.h>
 #include <signal.h>
 #include <netdb.h>
+#include <time.h>
 
 #define PORT     "9000"
 #define BACKLOG  10
@@ -49,15 +50,20 @@ struct thread_args{
 };
 
 // global variables
-static struct list* fd_list = NULL;
-static struct list* open_threads = NULL;
-static struct list* done_threads = NULL;
+static struct list* fd_list = NULL;         // list of files opened
+static struct list* open_threads = NULL;    // stores all opened receiving threads
+static struct list* done_threads = NULL;    // stores all completed receiving
+
+// timer thread id is dealt separately because it runs throughtout the whole
+// program and never stops, so its terminatio is handled differently
+static pthread_t timer_thread_id = 0;       
 
 // check for errors and immediately terminate
 void check(bool cond, char* msg)
 { 
     if(cond) 
     { 
+        if(errno == 0) errno = EINVAL;
         __log_err("%s: %s\n", msg, strerror(errno));
         closelog(); 
         exit(-1); 
@@ -92,6 +98,15 @@ void termination_handler(int signum)
         __log_msg("Caught signal, exiting\n");
 
         __close_files(fd_list);
+
+        if(timer_thread_id != 0)
+        {
+            check(pthread_cancel(timer_thread_id) != 0, "pthread_cancel");
+            void* tmp;
+            pthread_join(timer_thread_id, &tmp);
+            check(tmp != PTHREAD_CANCELED, "pthread_join");
+        }
+
         __wait_threads(open_threads);
         
 
@@ -169,6 +184,38 @@ void* recv_thread(void* args)
     return targ; 
 }
 
+void* timer_thread(void* arg)
+{
+    struct file_lock* file = (struct file_lock*)arg;
+    char outstr[50];
+    time_t t;
+    struct tm *tmp;
+    struct timespec clk;
+
+    clock_gettime(CLOCK_MONOTONIC, &clk);
+
+    while(true) 
+    {
+        t = time(NULL);
+        tmp = localtime(&t);
+        check(tmp == NULL, "localtime");
+
+        if(strftime(outstr, sizeof(outstr), "timestamp: %a, %d %b %Y %T %z\n", tmp) == 0)
+        {
+            __log_err("strftime: returned 0\n");
+            exit(-1);
+        }
+
+        pthread_mutex_lock(&file->lock);
+        check(write(file->fd, outstr, strlen(outstr)) == -1, "write");
+        pthread_mutex_unlock(&file->lock);
+
+        clk.tv_sec += 10;
+        clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &clk, NULL);
+    }
+    return NULL;
+}
+
 
 int main(int argc, char** argv)
 {
@@ -176,7 +223,8 @@ int main(int argc, char** argv)
 
     if(argc > 2)
     {
-        __log_err("Usage: ./aesdsocket [-p]\n");
+        __log_err("Usage: ./aesdsocket [-d]\n");
+        closelog();
         exit(-1);
     }
 
@@ -214,17 +262,17 @@ int main(int argc, char** argv)
     // pthread compliant linked list for file descriptors
     struct plist p_fd_list;
     p_fd_list.tail = &fd_list;
-    check(pthread_mutex_init(&p_fd_list.lock, NULL) < 0, "pthread_mutex_init(p_fd_list)");
+    check(pthread_mutex_init(&p_fd_list.lock, NULL) != 0, "pthread_mutex_init(p_fd_list)");
 
     // pthread compliant linked list for threads id
     struct plist p_done_threads;
     p_done_threads.tail = &done_threads;
-    check(pthread_mutex_init(&p_done_threads.lock, NULL) < 0, "pthread_mutex_init(p_done_threads)");
+    check(pthread_mutex_init(&p_done_threads.lock, NULL) != 0, "pthread_mutex_init(p_done_threads)");
 
     // single file with a lock
     struct file_lock file;
     file.fd = -1;
-    check(pthread_mutex_init(&file.lock, NULL) < 0, "pthread_mutex_init(file)");
+    check(pthread_mutex_init(&file.lock, NULL) != 0, "pthread_mutex_init(file)");
     
     // get available address automatically
     res = getaddrinfo(NULL, PORT, &hints, &result);
@@ -271,7 +319,9 @@ int main(int argc, char** argv)
     // open temp file that we will use to store whatever we receive
     file.fd = open(RECV_FILE, O_RDWR|O_APPEND|O_CREAT, S_IROTH|S_IWOTH|S_IRGRP|S_IWGRP|S_IRUSR|S_IWUSR);
     check(file.fd == -1, "open");
-    check(!append_list(&fd_list, file.fd), "append(file.v)");
+    check(!append_list(&fd_list, file.fd), "append(file.fd)");
+
+    check(pthread_create(&timer_thread_id, NULL, timer_thread, (void*)&file) != 0, "pthread_create");
 
     // start listening for connections
     res = listen(sfd, BACKLOG);
