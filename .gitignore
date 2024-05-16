@@ -7,4 +7,3 @@ aesd-build
 .vscode/
 test.sh.log
 aesdsocket
-check_log.sh

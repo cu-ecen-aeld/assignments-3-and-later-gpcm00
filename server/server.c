@@ -1,4 +1,4 @@
-#include "server.h"
+#include "list.h"
 
 #include <sys/socket.h>
 #include <sys/types.h>
@@ -7,6 +7,7 @@
 #include <fcntl.h>
 #include <syslog.h>
 #include <stdlib.h>
+#include <stdbool.h>
 #include <unistd.h>
 #include <errno.h>
 #include <string.h>
@@ -27,13 +28,51 @@
 #define __get_addr_in(saddr)    \
     (void*)&(((struct sockaddr_in*)&saddr)->sin_addr)
 
-#define __wait_all_threads(t)   \
-    for(int i = 0; i < open_threads.count; i++) \
-        check(pthread_join(t.threads[i], NULL) != 0, "pthread_join")
+#define __close_files(l)    \
+    while(l != NULL) { close(l->v); remove_list(&l, l->v); }
 
-#define __clean_list(l)         \
-    while(l != NULL) { close(l->fd); remove_list(&l, l->fd); }
+#define __wait_threads(t)   \
+    while(t != NULL) { clean_up(t->v); }
 
+
+// local data structures
+struct file_lock {
+    int fd;
+    pthread_mutex_t lock;  
+};
+
+struct thread_args{
+    int sockfd;
+    char* peer_addr;
+    struct file_lock* filefd;
+    struct plist* lst;
+};
+
+// global variables
+static struct list* fd_list = NULL;
+static struct list* open_threads = NULL;
+static struct list* done_threads = NULL;
+
+// check for errors and immediately terminate
+void check(bool cond, char* msg)
+{ 
+    if(cond) 
+    { 
+        __log_err("%s: %s\n", msg, strerror(errno));
+        closelog(); 
+        exit(-1); 
+    }
+}
+
+void clean_up(pthread_t tid)
+{
+    struct thread_args* targ;
+    pthread_join(tid, (void*)&targ);
+    remove_list(&fd_list, targ->sockfd);
+    remove_list(&open_threads, tid);
+    p_remove_list(targ->lst, tid);
+    free(targ);
+}
 
 bool set_sigaction(int signum, struct sigaction* new_action)
 {
@@ -45,20 +84,16 @@ bool set_sigaction(int signum, struct sigaction* new_action)
     return true;
 }
 
-static struct list* fd_list = NULL;
-
-static struct open_threads{
-    pthread_t threads[BACKLOG];
-    size_t count;
-} open_threads = {{0}, 0};
 void termination_handler(int signum)
 {
     if (signum == SIGINT || signum == SIGTERM)
     {
         // clean up the heap and finish all pending connections
         __log_msg("Caught signal, exiting\n");
-        __wait_all_threads(open_threads);
-        __clean_list(fd_list);  
+
+        __close_files(fd_list);
+        __wait_threads(open_threads);
+        
 
         // delete file if it's open
         if(access(RECV_FILE, F_OK) == 0)
@@ -73,17 +108,10 @@ void terminate_parent(pid_t pid)
 {
     if(pid != 0)
     {
-        __clean_list(fd_list);
+        __close_files(fd_list);
         exit(0);
     }
 }
-
-struct thread_args{
-    int sockfd;
-    char* peer_addr;
-    struct file_lock* filefd;
-    struct plist* lst;
-};
 
 void* recv_thread(void* args)
 {
@@ -128,24 +156,23 @@ void* recv_thread(void* args)
     check(nread == -1, "read");
 
     pthread_mutex_unlock(&file->lock);
+
+    free(buffer);
     
     // turn off the socket and remove it from the file descr table
     shutdown(sockfd, SHUT_RDWR);
-    p_remove_list(lst, sockfd);
 
-    free(targ);
-    free(buffer);
+    p_append_list(lst, pthread_self());
 
     __log_msg("Closed connection from %s\n", peer_addr);
 
-    return NULL; 
+    return targ; 
 }
 
 
 int main(int argc, char** argv)
 {
     openlog("aesdsocket", 0, LOG_USER);
-    open_threads.count = 0;
 
     if(argc > 2)
     {
@@ -154,8 +181,8 @@ int main(int argc, char** argv)
     }
 
     char* mode = argv[argc-1];
-
-    bool is_deamon = (strcmp(mode, "-d") == 0);
+    
+    bool deamon_mode = (strcmp(mode, "-d") == 0);
 
     // initialize graceful termination
     struct sigaction term;
@@ -174,21 +201,26 @@ int main(int argc, char** argv)
     
     // variables that hold socket info
     struct addrinfo hints, *rp, *result;
-    struct sockaddr peer_addr;
+    struct sockaddr peer_addr;      // ip addr in byte format
     socklen_t peer_addr_len;
-    char peer[INET_ADDRSTRLEN];
+    char peer[INET_ADDRSTRLEN];     // ip addr in string format
     
-    // initialize the flags for the main socket
+    // initialize the flags for the main socket as ipv4 and tcp
     memset(&hints, 0, sizeof hints);
     hints.ai_flags = AI_PASSIVE;
     hints.ai_socktype = SOCK_STREAM;
     hints.ai_family = AF_INET;
     
-    // pthread compliant linked list
+    // pthread compliant linked list for file descriptors
     struct plist p_fd_list;
     p_fd_list.tail = &fd_list;
     check(pthread_mutex_init(&p_fd_list.lock, NULL) < 0, "pthread_mutex_init(p_fd_list)");
-    
+
+    // pthread compliant linked list for threads id
+    struct plist p_done_threads;
+    p_done_threads.tail = &done_threads;
+    check(pthread_mutex_init(&p_done_threads.lock, NULL) < 0, "pthread_mutex_init(p_done_threads)");
+
     // single file with a lock
     struct file_lock file;
     file.fd = -1;
@@ -228,7 +260,7 @@ int main(int argc, char** argv)
     
     check(!append_list(&fd_list, sfd), "append(sfd)");
 
-    if(is_deamon)
+    if(deamon_mode)
     {
         __log_msg("Initializing deamon\n");
         pid_t pid = fork();
@@ -239,7 +271,7 @@ int main(int argc, char** argv)
     // open temp file that we will use to store whatever we receive
     file.fd = open(RECV_FILE, O_RDWR|O_APPEND|O_CREAT, S_IROTH|S_IWOTH|S_IRGRP|S_IWGRP|S_IRUSR|S_IWUSR);
     check(file.fd == -1, "open");
-    check(!append_list(&fd_list, file.fd), "append(file.fd)");
+    check(!append_list(&fd_list, file.fd), "append(file.v)");
 
     // start listening for connections
     res = listen(sfd, BACKLOG);
@@ -269,101 +301,20 @@ int main(int argc, char** argv)
         targ->sockfd = sockfd;
         targ->filefd = &file;
         targ->peer_addr = peer;
-        targ->lst = &p_fd_list;
-        pthread_create(&open_threads.threads[open_threads.count], NULL, recv_thread, (void*)targ);
-        open_threads.count++;
+        targ->lst = &p_done_threads;
 
-        // this prevents more backlogs than possible
-        if(open_threads.count >= BACKLOG)
-        {
-            for(int i = 0; i < open_threads.count; i++)
-            {
-                pthread_join(open_threads.threads[i], NULL);
-                __log_msg("Thread %ld completed\n", open_threads.threads[i]);
-            }
-            open_threads.count = 0;
-        }
-        
+        pthread_t thread_id = 0;
+
+        do {
+            res = pthread_create(&thread_id, NULL, recv_thread, (void*)targ);
+            check(res == EINVAL || res == EPERM, "pthread_create"); 
+        } while(res == EAGAIN);
+
+        append_list(&open_threads, thread_id);
+
+        __wait_threads(done_threads);
     }
     
     closelog();
     return 0;
-}
-
-// thread safe append file descriptor to the list
-bool p_append_list(struct plist* lst, int fd)
-{
-    pthread_mutex_lock(&lst->lock);
-    bool ret = append_list(lst->tail, fd);
-    pthread_mutex_unlock(&lst->lock);
-    return ret;
-}
-
-// thread safe remove file descriptor from the list
-bool p_remove_list(struct plist* lst, int fd)
-{
-    pthread_mutex_lock(&lst->lock);
-    bool ret = remove_list(lst->tail, fd);
-    pthread_mutex_unlock(&lst->lock);
-    return ret;
-}
-
-// append file descriptor to the list
-bool append_list(struct list** tail, int fd)
-{
-    struct list* new_item = (struct list*)malloc(sizeof(struct list));
-    if(new_item == NULL)
-    {
-        __log_err("malloc failed\n");
-        return false;
-    }
-    new_item->fd = fd;
-    new_item->prev = *tail;
-    *tail = new_item;
-    
-    return true;
-}
-
-// remove file descriptor from the list
-bool remove_list(struct list** tail, int fd)
-{
-    if(*tail == NULL)
-    {
-        return false;
-    }
-    
-    if((*tail)->fd == fd)
-    {
-        struct list* tmp = (*tail)->prev;
-        free(*tail);
-        *tail = tmp;
-        return true;
-    }
-    
-    struct list* lst = *tail;
-    
-    while(lst->prev != NULL)
-    {
-        if(lst->prev->fd == fd)
-        {
-            struct list* tmp = lst->prev;
-            lst->prev = tmp->prev;
-            free(tmp);
-            return true;
-        }
-        lst = lst->prev;
-    }
-    
-    return false;
-}
-
-// check for errors and immediately terminate
-void check(bool cond, char* msg)
-{ 
-    if(cond) 
-    { 
-        __log_err("%s: %s\n", msg, strerror(errno));
-        closelog(); 
-        exit(-1); 
-    }
 }
