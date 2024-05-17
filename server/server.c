@@ -92,9 +92,9 @@ bool set_sigaction(int signum, struct sigaction* new_action)
 
 void termination_handler(int signum)
 {
+    // clean up the heap and finish all pending connections
     if (signum == SIGINT || signum == SIGTERM)
     {
-        // clean up the heap and finish all pending connections
         __log_msg("Caught signal, exiting\n");
 
         __close_files(fd_list);
@@ -108,7 +108,6 @@ void termination_handler(int signum)
         }
 
         __wait_threads(open_threads);
-        
 
         // delete file if it's open
         if(access(RECV_FILE, F_OK) == 0)
@@ -191,6 +190,8 @@ void* timer_thread(void* arg)
     time_t t;
     struct tm *tmp;
     struct timespec clk;
+
+    check(file->fd < 0, "file not open in the thread");
 
     clock_gettime(CLOCK_MONOTONIC, &clk);
 
