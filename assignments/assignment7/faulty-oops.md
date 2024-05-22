@@ -1,4 +1,4 @@
-#OOPS
+# OOPS
 Unable to handle kernel NULL pointer dereference at virtual address 0000000000000000
 Mem abort info:
   ESR = 0x0000000096000045
@@ -43,7 +43,7 @@ Call trace:
 Code: ???????? ???????? d2800001 d2800000 (b900003f) 
 ---[ end trace 0000000000000000 ]---
 
-#Analysis
+# Analysis
 The first message actually tell us what is the problem that crashed the system: "Unable to handle kernel NULL pointer dereference at virtual address 0000000000000000"
 Then, we can analyze the functions currently on the stack to trace the problem. We can see the funtion faulty_write at the button of the stack, which gives us a hint of where the problem is.
 Finally, we can also see that the program counter is currently pointing to faulty_write.
