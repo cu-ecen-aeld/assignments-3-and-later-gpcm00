@@ -21,7 +21,24 @@
 
 #define BUFFER_SZ   (1024)
 
+#define USE_AESD_CHAR_DEVICE 1
+
+#if USE_AESD_CHAR_DEVICE == 1
+
+#define RECV_FILE   "/dev/aesdchar"
+#define __remove_file(f)
+#define __add_timer_thread(tid, thrd, f)
+
+#else
 #define RECV_FILE   "/var/tmp/aesdsocketdata"
+
+#define __remove_file(f)    \
+    if(access(f, F_OK) == 0) check(unlink(f) == -1, "unlink")
+
+#define __add_timer_thread(tid, thrd, f)    \
+    check(pthread_create(tid, NULL, thrd, (void*)f) != 0, "pthread_create")
+#endif
+
 
 #define __log_msg(...)  syslog(LOG_INFO, __VA_ARGS__ )  
 #define __log_err(...)  syslog(LOG_ERR, __VA_ARGS__ )
@@ -108,12 +125,8 @@ void termination_handler(int signum)
         }
 
         __wait_threads(open_threads);
+        __remove_file(RECV_FILE);
 
-        // delete file if it's open
-        if(access(RECV_FILE, F_OK) == 0)
-        {
-            check(unlink(RECV_FILE) == -1, "unlink");
-        } 
         exit(0);
     }
 }
@@ -183,6 +196,7 @@ void* recv_thread(void* args)
     return targ; 
 }
 
+#if USE_AESD_CHAR_DEVICE == 0
 void* timer_thread(void* arg)
 {
     struct file_lock* file = (struct file_lock*)arg;
@@ -216,7 +230,7 @@ void* timer_thread(void* arg)
     }
     return NULL;
 }
-
+#endif
 
 int main(int argc, char** argv)
 {
@@ -322,7 +336,8 @@ int main(int argc, char** argv)
     check(file.fd == -1, "open");
     check(!append_list(&fd_list, file.fd), "append(file.fd)");
 
-    check(pthread_create(&timer_thread_id, NULL, timer_thread, (void*)&file) != 0, "pthread_create");
+    // check(pthread_create(&timer_thread_id, NULL, timer_thread, (void*)&file) != 0, "pthread_create");
+    __add_timer_thread(&timer_thread_id, timer_thread, &file);
 
     // start listening for connections
     res = listen(sfd, BACKLOG);

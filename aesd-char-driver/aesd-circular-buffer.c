@@ -16,6 +16,13 @@
 
 #include "aesd-circular-buffer.h"
 
+#ifdef __KERNEL__
+#include <linux/printk.h>
+#define __print(fmt, args...) printk( KERN_DEBUG "aesdchar: " fmt, ## args)
+#else
+#define __print(fmt, args...)
+#endif
+
 /**
  * @param buffer the buffer to search for corresponding offset.  Any necessary locking must be performed by caller.
  * @param char_offset the position to search for in the buffer list, describing the zero referenced
@@ -29,15 +36,16 @@
 struct aesd_buffer_entry *aesd_circular_buffer_find_entry_offset_for_fpos(struct aesd_circular_buffer *buffer,
             size_t char_offset, size_t *entry_offset_byte_rtn )
 {
+
+    int pos = char_offset;
+    size_t i;
     uint8_t bufflen = (AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED + buffer->in_offs - buffer->out_offs) 
                 % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
     
     if(bufflen == 0 && buffer->full)
         bufflen = AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
 
-    int pos = char_offset;
-    for(size_t i = 0; i < bufflen; i++)
-    {
+    for(i = 0; i < bufflen; i++) {
         uint8_t entry = (buffer->in_offs + i) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
         pos -= buffer->entry[entry].size;
         if(pos < 0)
@@ -56,24 +64,26 @@ struct aesd_buffer_entry *aesd_circular_buffer_find_entry_offset_for_fpos(struct
 * Any necessary locking must be handled by the caller
 * Any memory referenced in @param add_entry must be allocated by and/or must have a lifetime managed by the caller.
 */
-void aesd_circular_buffer_add_entry(struct aesd_circular_buffer *buffer, const struct aesd_buffer_entry *add_entry)
+const char* aesd_circular_buffer_add_entry(struct aesd_circular_buffer *buffer, 
+            const struct aesd_buffer_entry *add_entry)
 {
-    if(buffer->full)
-    {
+    if(buffer->full) {
+        const char* currptr = buffer->entry[buffer->in_offs].buffptr;
         buffer->entry[buffer->in_offs] = *add_entry;
-
         if(buffer->in_offs == buffer->out_offs) 
             buffer->out_offs = (buffer->out_offs + 1) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
-            
+
         buffer->in_offs = (buffer->in_offs + 1) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
-    }
-    else
-    {
-        buffer->entry[buffer->in_offs] = *add_entry;
-        buffer->in_offs = (buffer->in_offs + 1) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
+        
+        return currptr;
     }
 
+    buffer->entry[buffer->in_offs] = *add_entry;
+    buffer->in_offs = (buffer->in_offs + 1) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
+
     buffer->full = (buffer->in_offs == buffer->out_offs);
+
+    return NULL;
 }
 
 /**
