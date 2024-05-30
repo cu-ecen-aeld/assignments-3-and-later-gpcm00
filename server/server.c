@@ -153,7 +153,7 @@ void* recv_thread(void* args)
     memset((void*)buffer, 0, BUFFER_SZ);
     ssize_t nread;
 
-    check(file->fd < 0, "file not open in the thread");
+    // check(file->fd < 0, "file not open in the thread");
 
     // receive data and keep it in the heap for writing
     off_t buffer_offset = 0;
@@ -170,6 +170,9 @@ void* recv_thread(void* args)
 
     // file operation start here, so ensure that no one else is messing up with the file
     pthread_mutex_lock(&file->lock);
+    
+    file->fd = open(RECV_FILE, O_RDWR|O_APPEND|O_CREAT, S_IROTH|S_IWOTH|S_IRGRP|S_IWGRP|S_IRUSR|S_IWUSR);
+    check(file->fd == -1, "open");
 
     check(write(file->fd, buffer, nread + buffer_offset) == -1, "write");
 
@@ -183,6 +186,8 @@ void* recv_thread(void* args)
         check(send(sockfd, buffer, nread, 0) == -1, "send");
     }
     check(nread == -1, "read");
+    
+    check(close(file->fd) == -1, "close");
 
     pthread_mutex_unlock(&file->lock);
 
@@ -334,9 +339,9 @@ int main(int argc, char** argv)
     }
     
     // open temp file that we will use to store whatever we receive
-    file.fd = open(RECV_FILE, O_RDWR|O_APPEND|O_CREAT, S_IROTH|S_IWOTH|S_IRGRP|S_IWGRP|S_IRUSR|S_IWUSR);
-    check(file.fd == -1, "open");
-    check(!append_list(&fd_list, file.fd), "append(file.fd)");
+    // file.fd = open(RECV_FILE, O_RDWR|O_APPEND|O_CREAT, S_IROTH|S_IWOTH|S_IRGRP|S_IWGRP|S_IRUSR|S_IWUSR);
+    // check(file.fd == -1, "open");
+    // check(!append_list(&fd_list, file.fd), "append(file.fd)");
 
     // check(pthread_create(&timer_thread_id, NULL, timer_thread, (void*)&file) != 0, "pthread_create");
     __add_timer_thread(&timer_thread_id, timer_thread, &file);
