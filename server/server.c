@@ -173,7 +173,9 @@ void* recv_thread(void* args)
 
     check(write(file->fd, buffer, nread + buffer_offset) == -1, "write");
 
+#if USE_AESD_CHAR_DEVICE == 0
     check(lseek(file->fd, 0, SEEK_SET) == -1, "lseek");   // read from the beginning of the file
+#endif
 
     // read in chunks of "buffer_sz" and send immediately
     while((nread = read(file->fd, (void*)buffer, buffer_sz)) > 0)
