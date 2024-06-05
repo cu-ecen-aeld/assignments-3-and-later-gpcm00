@@ -1,13 +1,16 @@
 #include "list.h"
+#include "aesd_ioctl.h"
 
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/ioctl.h>
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <syslog.h>
 #include <stdlib.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <unistd.h>
 #include <errno.h>
 #include <string.h>
@@ -71,9 +74,11 @@ static struct list* fd_list = NULL;         // list of files opened
 static struct list* open_threads = NULL;    // stores all opened receiving threads
 static struct list* done_threads = NULL;    // stores all completed receiving
 
-// timer thread id is dealt separately because it runs throughtout the whole
-// program and never stops, so its terminatio is handled differently
-static pthread_t timer_thread_id = 0;       
+#if USE_AESD_CHAR_DEVICE == 0
+// timer thread id is dealt separately because it runs throughout the whole
+// program and never stops, so its termination is handled differently
+static pthread_t timer_thread_id = 0;     
+#endif  
 
 // check for errors and immediately terminate
 void check(bool cond, char* msg)
@@ -115,7 +120,8 @@ void termination_handler(int signum)
         __log_msg("Caught signal, exiting\n");
 
         __close_files(fd_list);
-
+        
+#if USE_AESD_CHAR_DEVICE == 0
         if(timer_thread_id != 0)
         {
             check(pthread_cancel(timer_thread_id) != 0, "pthread_cancel");
@@ -123,6 +129,7 @@ void termination_handler(int signum)
             pthread_join(timer_thread_id, &tmp);
             check(tmp != PTHREAD_CANCELED, "pthread_join");
         }
+#endif
 
         __wait_threads(open_threads);
         __remove_file(RECV_FILE);
@@ -140,6 +147,41 @@ void terminate_parent(pid_t pid)
     }
 }
 
+#if USE_AESD_CHAR_DEVICE == 1
+bool cmdec(const char* cmd, uint32_t* xrtn, uint32_t* yrtn)
+{
+    size_t len = strlen(cmd);
+    const char* delim = " :,";
+    char* token;
+    uint32_t* ptr = xrtn;
+    bool ret = false;
+    char *str = (char*)malloc(len);
+
+    if(str == NULL) 
+    {
+        return false;
+    }
+
+    // copy string because strtok will modify the original string
+    strcpy(str, cmd);
+
+    token = strtok(str, delim);
+    if(!strcmp(token, "AESDCHAR_IOCSEEKTO")) 
+    {
+        for(int i = 0; i < 2; i++) 
+        {
+            token = strtok(NULL, delim);
+            *ptr = atoi(token);
+            ptr = yrtn;
+        }
+        ret = true;
+    }
+
+    free(str);
+    return ret;
+}
+#endif
+
 void* recv_thread(void* args)
 {
     struct thread_args* targ = (struct thread_args*) args;
@@ -147,13 +189,12 @@ void* recv_thread(void* args)
     struct file_lock *file = targ->filefd;
     char* peer_addr = targ->peer_addr;
     struct plist* lst = targ->lst;
+    struct aesd_seekto seekto;
     
     char* buffer = (char*)malloc(BUFFER_SZ * sizeof(char));
     check(buffer == NULL, "malloc");
     memset((void*)buffer, 0, BUFFER_SZ);
     ssize_t nread;
-
-    // check(file->fd < 0, "file not open in the thread");
 
     // receive data and keep it in the heap for writing
     off_t buffer_offset = 0;
@@ -168,16 +209,28 @@ void* recv_thread(void* args)
     }
     check(nread == -1, "recv");
 
-    // file operation start here, so ensure that no one else is messing up with the file
     pthread_mutex_lock(&file->lock);
     
     file->fd = open(RECV_FILE, O_RDWR|O_APPEND|O_CREAT, S_IROTH|S_IWOTH|S_IRGRP|S_IWGRP|S_IRUSR|S_IWUSR);
     check(file->fd == -1, "open");
 
+#if USE_AESD_CHAR_DEVICE == 1
+
+    if(cmdec(buffer, &seekto.write_cmd, &seekto.write_cmd_offset)) 
+    {
+        check(ioctl(file->fd, AESDCHAR_IOCSEEKTO, &seekto) == -1, "ioctl");  
+    } 
+    else 
+    {
+        check(write(file->fd, buffer, nread + buffer_offset) == -1, "write");
+    }
+
+#else
+
     check(write(file->fd, buffer, nread + buffer_offset) == -1, "write");
 
-#if USE_AESD_CHAR_DEVICE == 0
     check(lseek(file->fd, 0, SEEK_SET) == -1, "lseek");   // read from the beginning of the file
+
 #endif
 
     // read in chunks of "buffer_sz" and send immediately
@@ -337,11 +390,6 @@ int main(int argc, char** argv)
         check(pid == -1, "fork");
         terminate_parent(pid);
     }
-    
-    // open temp file that we will use to store whatever we receive
-    // file.fd = open(RECV_FILE, O_RDWR|O_APPEND|O_CREAT, S_IROTH|S_IWOTH|S_IRGRP|S_IWGRP|S_IRUSR|S_IWUSR);
-    // check(file.fd == -1, "open");
-    // check(!append_list(&fd_list, file.fd), "append(file.fd)");
 
     // check(pthread_create(&timer_thread_id, NULL, timer_thread, (void*)&file) != 0, "pthread_create");
     __add_timer_thread(&timer_thread_id, timer_thread, &file);
