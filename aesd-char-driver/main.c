@@ -404,24 +404,24 @@ long aesd_ioctl(struct file* filp, unsigned int cmd,
             unsigned long arg)
 {
     long retval = 0;
-    int err = 0;
     struct aesd_dev *dev = filp->private_data;
     struct aesd_seekto seekto;
     loff_t off = 0;
     
-
+    PDEBUG("%ld\n", AESDCHAR_IOCSEEKTO);
     if (_IOC_TYPE(cmd) != AESD_IOC_MAGIC) {
+        PDEBUG("Wrong magic number\n");
         return -ENOTTY;
     }
 	if (_IOC_NR(cmd) > AESDCHAR_IOC_MAXNR) {
+        PDEBUG("Too much shit\n");
         return -ENOTTY;
     }
 
     /* keep the read logic in case it ever gets added */
-    if ((_IOC_DIR(cmd) & _IOC_READ)) {
-	    return -ENOTTY;
-    } else if ((_IOC_DIR(cmd) & _IOC_READ)) {
-        if(copy_to_user(&seekto, (void __user *)arg, sizeof(struct aesd_seekto))) {
+    if ((_IOC_DIR(cmd) & _IOC_WRITE)) {
+        PDEBUG("Writing to kernel memory");
+        if(copy_from_user(&seekto, (void __user *)arg, sizeof(struct aesd_seekto))) {
             return -EFAULT;
         }
     }
@@ -434,6 +434,7 @@ long aesd_ioctl(struct file* filp, unsigned int cmd,
     {
     case AESDCHAR_IOCSEEKTO:
         off = aesd_getoffs(dev, seekto);
+        PDEBUG("off %lld\n", off);
         break;
     
     default:
@@ -443,13 +444,14 @@ long aesd_ioctl(struct file* filp, unsigned int cmd,
 
     if(off != -EINVAL) {
         filp->f_pos = off;
+        PDEBUG("f_pos %lld\n", filp->f_pos);
     }
 
     retval = off;
 
 unlock:
     mutex_unlock(&dev->lock);
-    PDEBUG("ioctl: %lld\n", off);
+    PDEBUG("ioctl: %ld\n", retval);
     return retval;
 }
 
@@ -461,6 +463,7 @@ struct file_operations aesd_fops = {
     .release =          aesd_release,
     .llseek =           aesd_llseek,
     .compat_ioctl =     aesd_ioctl,
+    .unlocked_ioctl =   aesd_ioctl,
 };
 
 static int aesd_setup_cdev(struct aesd_dev *dev)
