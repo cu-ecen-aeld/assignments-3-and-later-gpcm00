@@ -156,11 +156,7 @@ bool cmdec(const char* cmd, uint32_t* xrtn, uint32_t* yrtn)
     uint32_t* ptr = xrtn;
     bool ret = false;
     char *str = (char*)malloc(len);
-
-    if(str == NULL) 
-    {
-        return false;
-    }
+    check(str == NULL, "malloc");
 
     // copy string because strtok will modify the original string
     strcpy(str, cmd);

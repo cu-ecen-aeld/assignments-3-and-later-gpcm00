@@ -20,6 +20,7 @@
 #include <linux/cdev.h>
 #include <linux/fs.h> // file_operations
 #include "aesdchar.h"
+#include "aesd_ioctl.h"
 
 #undef max
 #undef min
@@ -145,12 +146,13 @@ static uint8_t aesd_applyoff(struct aesd_dev *dev, size_t off, size_t* rtn_off)
 {
     struct aesd_circular_buffer *buf = &dev->buffer;
     uint8_t i = 0;
+    int pos = 0;
     uint8_t bufflen = __get_bufflen(buf->in_offs - buf->out_offs);
     if(bufflen == 0 && buf->full) {
         bufflen = AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
     }
 
-    int pos = off;
+    pos = off;
     for(i = 0; i < bufflen; i++) {
         pos -= buf->entry[i].size;
         if(pos <= 0) {
@@ -190,12 +192,52 @@ static size_t aesd_readfull(struct aesd_dev *dev, uint8_t entry_i,
 static size_t aesd_filesz(struct aesd_dev *dev)
 {
     struct aesd_circular_buffer *buf = &dev->buffer;
-    uint8_t bufflen = __get_bufflen(buf->in_offs - buf->out_offs);
+    
+
     uint8_t i = 0;
     size_t retval = 0;
+
+    uint8_t bufflen = __get_bufflen(buf->in_offs - buf->out_offs);
+    if(bufflen == 0 && buf->full) {
+        bufflen = AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
+    }
+
     for(i = 0; i < bufflen; i++) {
         retval += buf->entry[i].size;
     }
+    return retval;
+}
+
+static loff_t aesd_getoffs(struct aesd_dev *dev, struct aesd_seekto seek)
+{
+    struct aesd_circular_buffer *buf = &dev->buffer;
+
+    uint8_t i = 0, j = 0;
+    loff_t retval = 0;
+    uint8_t entry = 0;
+
+    uint8_t bufflen = __get_bufflen(buf->in_offs - buf->out_offs);
+    if(bufflen == 0 && buf->full) {
+        bufflen = AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
+    }
+
+    if(seek.write_cmd >= bufflen) {
+        return -EINVAL;
+    }
+
+    entry = __circular_idx(buf->out_offs + seek.write_cmd);
+
+    if(seek.write_cmd_offset >= buf->entry[entry].size) {
+        return -EINVAL;
+    }
+    
+    for(i = 0; i < entry; i++) {
+        j = __circular_idx(buf->out_offs + i);
+        retval += buf->entry[j].size;
+    }
+
+    retval += seek.write_cmd_offset;
+
     return retval;
 }
 
@@ -261,7 +303,7 @@ free:
     kfree(str);
     
 out:
-    PDEBUG("read: %d\n", retval);
+    PDEBUG("read: %ld\n", retval);
     return retval;
 }
 
@@ -311,7 +353,7 @@ free:
     kfree(usrstr);
 
 out:
-    PDEBUG("write: %d\n", retval);
+    PDEBUG("write: %ld\n", retval);
     return retval;
 }
 
@@ -353,17 +395,72 @@ loff_t aesd_llseek(struct file *filp, loff_t off, int whence)
 
 unlock:
     mutex_unlock(&dev->lock);
+
+    PDEBUG("llseek: %lld\n", retval);
     return retval;
 }
 
+long aesd_ioctl(struct file* filp, unsigned int cmd,
+            unsigned long arg)
+{
+    long retval = 0;
+    int err = 0;
+    struct aesd_dev *dev = filp->private_data;
+    struct aesd_seekto seekto;
+    loff_t off = 0;
+    
+
+    if (_IOC_TYPE(cmd) != AESD_IOC_MAGIC) {
+        return -ENOTTY;
+    }
+	if (_IOC_NR(cmd) > AESDCHAR_IOC_MAXNR) {
+        return -ENOTTY;
+    }
+
+    /* keep the read logic in case it ever gets added */
+    if ((_IOC_DIR(cmd) & _IOC_READ)) {
+	    return -ENOTTY;
+    } else if ((_IOC_DIR(cmd) & _IOC_READ)) {
+        if(copy_to_user(&seekto, (void __user *)arg, sizeof(struct aesd_seekto))) {
+            return -EFAULT;
+        }
+    }
+
+    if(mutex_lock_interruptible(&dev->lock)) {
+        return -ERESTARTSYS;
+    }    
+    
+    switch (cmd)
+    {
+    case AESDCHAR_IOCSEEKTO:
+        off = aesd_getoffs(dev, seekto);
+        break;
+    
+    default:
+        retval = -ENOTTY;
+        goto unlock;
+    }
+
+    if(off != -EINVAL) {
+        filp->f_pos = off;
+    }
+
+    retval = off;
+
+unlock:
+    mutex_unlock(&dev->lock);
+    PDEBUG("ioctl: %lld\n", off);
+    return retval;
+}
 
 struct file_operations aesd_fops = {
-    .owner =    THIS_MODULE,
-    .read =     aesd_read,
-    .write =    aesd_write,
-    .open =     aesd_open,
-    .release =  aesd_release,
-    .llseek =   aesd_llseek,
+    .owner =            THIS_MODULE,
+    .read =             aesd_read,
+    .write =            aesd_write,
+    .open =             aesd_open,
+    .release =          aesd_release,
+    .llseek =           aesd_llseek,
+    .compat_ioctl =     aesd_ioctl,
 };
 
 static int aesd_setup_cdev(struct aesd_dev *dev)
