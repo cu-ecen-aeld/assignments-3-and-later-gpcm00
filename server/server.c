@@ -214,8 +214,6 @@ void* recv_thread(void* args)
 
     if(cmdec(buffer, &seekto.write_cmd, &seekto.write_cmd_offset)) 
     {
-        __log_msg("ioctl %d %d\n", seekto.write_cmd, seekto.write_cmd_offset);
-        __log_msg("cmd %ld\n", AESDCHAR_IOCSEEKTO);
         check(ioctl(file->fd, AESDCHAR_IOCSEEKTO, &seekto) == -1, "ioctl");  
     } 
     else 

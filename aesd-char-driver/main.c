@@ -410,17 +410,13 @@ long aesd_ioctl(struct file* filp, unsigned int cmd,
     
     PDEBUG("%ld\n", AESDCHAR_IOCSEEKTO);
     if (_IOC_TYPE(cmd) != AESD_IOC_MAGIC) {
-        PDEBUG("Wrong magic number\n");
         return -ENOTTY;
     }
 	if (_IOC_NR(cmd) > AESDCHAR_IOC_MAXNR) {
-        PDEBUG("Too much shit\n");
         return -ENOTTY;
     }
 
-    /* keep the read logic in case it ever gets added */
     if ((_IOC_DIR(cmd) & _IOC_WRITE)) {
-        PDEBUG("Writing to kernel memory");
         if(copy_from_user(&seekto, (void __user *)arg, sizeof(struct aesd_seekto))) {
             return -EFAULT;
         }
@@ -434,7 +430,6 @@ long aesd_ioctl(struct file* filp, unsigned int cmd,
     {
     case AESDCHAR_IOCSEEKTO:
         off = aesd_getoffs(dev, seekto);
-        PDEBUG("off %lld\n", off);
         break;
     
     default:
@@ -444,7 +439,6 @@ long aesd_ioctl(struct file* filp, unsigned int cmd,
 
     if(off != -EINVAL) {
         filp->f_pos = off;
-        PDEBUG("f_pos %lld\n", filp->f_pos);
     }
 
     retval = off;
@@ -486,9 +480,6 @@ int aesd_init_module(void)
 {
     dev_t dev = 0;
     int result;
-
-    PDEBUG("***********************************************"
-    "******************************************************\n");
     
     result = alloc_chrdev_region(&dev, aesd_minor, 1,
             "aesdchar");
